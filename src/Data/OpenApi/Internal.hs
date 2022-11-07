@@ -14,6 +14,8 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE TypeApplications #-}
 module Data.OpenApi.Internal where
 
 import Prelude ()
@@ -56,6 +58,8 @@ import Data.OpenApi.Internal.AesonUtils (AesonDefaultValue (..), HasSwaggerAeson
                                          sopSwaggerGenericToJSON, sopSwaggerGenericToJSONWithOpts)
 import Data.OpenApi.Internal.Utils
 import Generics.SOP.TH                  (deriveGeneric)
+import Data.Aeson.Types (parseMaybe)
+import Data.Maybe (fromMaybe, isJust)
 
 -- $setup
 -- >>> :seti -XDataKinds
@@ -668,9 +672,8 @@ type Pattern = Text
 data Discriminator = Discriminator
   { -- | The name of the property in the payload that will hold the discriminator value.
     _discriminatorPropertyName :: Text
-
     -- | An object to hold mappings between payload values and schema names or references.
-  , _discriminatorMapping :: InsOrdHashMap Text Text
+  , _discriminatorMapping :: InsOrdHashMap Text (Referenced Schema)
   } deriving (Eq, Show, Generic, Data, Typeable)
 
 -- | A @'Schema'@ with an optional name.
@@ -1339,7 +1342,7 @@ instance ToJSON OpenApiItems where
     , "maxItems" .= (0 :: Int)
     , "example" .= Array mempty
     ]
-  toJSON (OpenApiItemsArray  x) = object [ "items" .= x ]
+  toJSON (OpenApiItemsArray  x) = object [ "items" .= (object [ "oneOf" .= x ]) ]
 
 instance ToJSON Components where
   toJSON = sopSwaggerGenericToJSON
@@ -1476,8 +1479,9 @@ instance FromJSON Header where
 instance FromJSON OpenApiItems where
   parseJSON js@(Object obj)
       | null obj  = pure $ OpenApiItemsArray [] -- Nullary schema.
-      | otherwise = OpenApiItemsObject <$> parseJSON js
-  parseJSON js@(Array _)  = OpenApiItemsArray  <$> parseJSON js
+      | otherwise = parseJSON @(Referenced Schema) js >>= \case
+                r@(Inline s) -> pure $ maybe (OpenApiItemsObject r) OpenApiItemsArray (_schemaOneOf s)
+                r -> pure $ OpenApiItemsObject r
   parseJSON _ = empty
 
 instance FromJSON Components where

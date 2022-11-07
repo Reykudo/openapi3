@@ -76,6 +76,8 @@ import           Data.OpenApi.SchemaOptions
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy.Char8 as BSL
 import GHC.TypeLits (TypeError, ErrorMessage(..))
+import Data.Traversable (for)
+
 
 unnamed :: Schema -> NamedSchema
 unnamed schema = NamedSchema Nothing schema
@@ -1020,14 +1022,30 @@ instance ( GSumToSchema f
   -- Aeson does not unwrap unary record in sum types.
   gdeclareNamedSchema opts p s = gdeclareNamedSumSchema (opts { unwrapUnaryRecords = False } )p s
 
+
+toReferenced :: Definitions a -> T.Text -> Referenced a -> (Definitions a, Referenced a)
+toReferenced d _ r@(Ref a)               = (d, r)
+toReferenced d t (Inline s) | not (t `InsOrdHashMap.member` d) = (InsOrdHashMap.insert t s d, Ref (Reference t))
+                            | otherwise = (d, Ref (Reference t))
+
 gdeclareNamedSumSchema :: GSumToSchema f => SchemaOptions -> Proxy f -> Schema -> Declare (Definitions Schema) NamedSchema
 gdeclareNamedSumSchema opts proxy _
   | allNullaryToStringTag opts && allNullary = pure $ unnamed (toStringTag sumSchemas)
   | otherwise = do
-    (schemas, _) <- runWriterT declareSumSchema
+    (schemas', _) <- runWriterT declareSumSchema
+    schemas <- for schemas' $ \(name, schema) -> do
+            definitions <- look
+            let (newDefinitions, newSchema) = toReferenced definitions name schema
+            declare newDefinitions
+            pure (name, newSchema)
+
     return $ unnamed $ mempty
       & type_ ?~ OpenApiObject
       & oneOf ?~ (snd <$> schemas)
+      & discriminator 
+        ?~ Discriminator { _discriminatorPropertyName = "tag"
+                         , _discriminatorMapping = InsOrdHashMap.fromList schemas
+                         }
   where
     declareSumSchema = gsumToSchema opts proxy
     (sumSchemas, All allNullary) = undeclare (runWriterT declareSumSchema)
