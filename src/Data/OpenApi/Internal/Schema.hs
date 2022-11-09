@@ -1023,11 +1023,17 @@ instance ( GSumToSchema f
   -- Aeson does not unwrap unary record in sum types.
   gdeclareNamedSchema opts p s = gdeclareNamedSumSchema (opts { unwrapUnaryRecords = False } )p s
 
-
-toReferenced :: Definitions a -> T.Text -> Referenced a -> (Definitions a, Referenced a)
-toReferenced d _ r@(Ref a)               = (d, r)
-toReferenced d t (Inline s) | not (t `InsOrdHashMap.member` d) = (InsOrdHashMap.insert t s d, Ref (Reference t))
-                            | otherwise = (d, Ref (Reference t))
+toReferenced :: T.Text -> Referenced Schema -> Declare (Definitions Schema) (Referenced Schema)
+toReferenced _ r@(Ref a) = pure r
+toReferenced t r@(Inline s) = do
+  d <- look
+  case InsOrdHashMap.lookup t d of
+    Just el
+      | el == s -> pure $ Ref $ Reference t
+      | el /= s -> toReferenced (t <> "_") r
+    Nothing -> do
+      declare $ InsOrdHashMap.insert t s d
+      pure $ Ref $ Reference t
 
 gdeclareNamedSumSchema :: GSumToSchema f => SchemaOptions -> Proxy f -> Schema -> Declare (Definitions Schema) NamedSchema
 gdeclareNamedSumSchema opts proxy _
@@ -1035,9 +1041,7 @@ gdeclareNamedSumSchema opts proxy _
   | otherwise = do
     (schemas', _) <- runWriterT declareSumSchema
     schemas <- for schemas' $ \(name, schema) -> do
-            definitions <- look
-            let (newDefinitions, newSchema) = toReferenced definitions name schema
-            declare newDefinitions
+            newSchema <- toReferenced name schema
             pure (name, newSchema)
 
     return $ unnamed $ mempty
@@ -1045,7 +1049,8 @@ gdeclareNamedSumSchema opts proxy _
       & oneOf ?~ (snd <$> schemas)
       & discriminator 
         ?~ Discriminator { _discriminatorPropertyName = "tag"
-                         , _discriminatorMapping = InsOrdHashMap.fromList schemas
+                         , _discriminatorMapping 
+                          = InsOrdHashMap.fromList [(name, ReferenceToSchema ref) | (name, Ref ref) <- schemas]
                          }
   where
     declareSumSchema = gsumToSchema opts proxy

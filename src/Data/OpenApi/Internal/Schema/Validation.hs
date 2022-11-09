@@ -383,7 +383,7 @@ validateObject o = withSchema $ \sch ->
   case sch ^. discriminator of
     Just (Discriminator pname types) -> case fromJSON <$> lookupKey pname o of
       Just (Success pvalue) ->
-        let ref = fromMaybe (Ref (Reference pvalue)) $ InsOrdHashMap.lookup pvalue types
+        let ref :: Referenced Schema = maybe (Ref (Reference pname)) (Ref . getReferenceToSchema) (InsOrdHashMap.lookup pvalue types)
         -- TODO ref may be name or reference
         in validateWithSchemaRef ref (Object o)
       Just (Error msg)   -> invalid ("failed to parse discriminator property " ++ show pname ++ ": " ++ show msg)
